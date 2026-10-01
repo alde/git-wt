@@ -5,7 +5,15 @@ An interactive `git worktree list` picker using `fzf`.
 - **Enter** changes the current shell directory to the selected worktree.
 - **x** asks for confirmation, then runs `git worktree remove` for the selected
   worktree. Git refuses to remove a dirty worktree. The branch is retained.
+- **Ctrl-S** checks whether the focused worktree has local changes.
 - **Esc** leaves the directory and worktrees alone.
+
+The preview shows how many commits the focused worktree's HEAD is ahead of and
+behind the local `main` branch (or `master` if there is no `main`), and whether
+that HEAD is contained in the base branch. The counts use local refs and do
+not fetch. A squash merge will not appear as contained. The full dirty check,
+including untracked files, runs only when you press Ctrl-S; it can take several
+seconds in a large worktree.
 
 Requires Git, fzf, Python 3.9 or newer, and zsh, bash, or fish.
 

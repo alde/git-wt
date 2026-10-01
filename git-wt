@@ -2,6 +2,7 @@
 """Select a Git worktree to enter or remove."""
 
 import os
+import shlex
 import subprocess
 import sys
 
@@ -23,6 +24,14 @@ def worktrees():
     return entries
 
 
+def preview_command(option):
+    return " ".join((
+        shlex.quote(sys.executable),
+        shlex.quote(os.path.abspath(__file__)),
+        option, "{1}",
+    ))
+
+
 def choose(entries):
     rows = []
     for index, entry in enumerate(entries):
@@ -32,7 +41,9 @@ def choose(entries):
     result = subprocess.run(
         ["fzf", "--read0", "--print0", "--no-multi", "--expect=x",
          "--delimiter=\t", "--with-nth=2..",
-         "--header=Enter: cd  |  x: remove worktree"],
+         "--preview=" + preview_command("--preview"),
+         "--bind=ctrl-s:preview(" + preview_command("--status-preview") + ")",
+         "--header=Enter: cd  |  x: remove  |  Ctrl-S: check changes"],
         input=b"\0".join(rows) + b"\0",
         stdout=subprocess.PIPE,
     )
@@ -42,11 +53,59 @@ def choose(entries):
     return key, entries[int(row.split(b"\t", 1)[0])]
 
 
+def base_branch(path):
+    for branch in ("main", "master"):
+        if subprocess.run(
+            ["git", "-C", path, "show-ref", "--verify", "--quiet",
+             f"refs/heads/{branch}"],
+        ).returncode == 0:
+            return branch
+    return None
+
+
+def ahead_behind(path, branch):
+    counts = subprocess.run(
+        ["git", "-C", path, "rev-list", "--left-right", "--count",
+         f"refs/heads/{branch}...HEAD"],
+        capture_output=True, check=True, text=True,
+    ).stdout.split()
+    behind, ahead = map(int, counts)
+    return ahead, behind
+
+
+def has_changes(path):
+    status = subprocess.run(
+        ["git", "-C", path, "status", "--porcelain=v1", "-z",
+         "--untracked-files=normal"],
+        stdout=subprocess.PIPE, check=True,
+    )
+    return bool(status.stdout)
+
+
+def preview(entry, check_changes=False):
+    path = entry["path"]
+    print(f"Worktree: {path}")
+    print(f"Branch:   {entry['branch'] or 'unknown'}")
+    branch = base_branch(path)
+    if branch:
+        ahead, behind = ahead_behind(path, branch)
+        print(f"Against {branch}: {ahead} ahead, {behind} behind")
+        print(f"Contained in {branch}: {'yes' if ahead == 0 else 'no'}")
+    else:
+        print("Base branch: no local main or master")
+    sys.stdout.flush()
+    if check_changes:
+        print(f"Changes: {'dirty' if has_changes(path) else 'clean'}")
+    else:
+        print("Changes: press Ctrl-S to check")
+
+
 def confirm_removal(path):
-    with open("/dev/tty", "r+", encoding="utf-8") as terminal:
-        terminal.write(f"Remove worktree {path}? [y/N] ")
-        terminal.flush()
-        return terminal.readline().strip().lower() in ("y", "yes")
+    with open("/dev/tty", "w", encoding="utf-8") as prompt:
+        with open("/dev/tty", "r", encoding="utf-8") as response:
+            prompt.write(f"Remove worktree {path}? [y/N] ")
+            prompt.flush()
+            return response.readline().strip().lower() in ("y", "yes")
 
 
 def remove_worktree(path):
@@ -61,10 +120,14 @@ def remove_worktree(path):
 
 
 def main():
-    if len(sys.argv) != 1:
+    preview_mode = len(sys.argv) == 3 and sys.argv[1] in ("--preview", "--status-preview")
+    if len(sys.argv) != 1 and not preview_mode:
         print("usage: git wt", file=sys.stderr)
         return 2
     try:
+        if len(sys.argv) == 3:
+            preview(worktrees()[int(sys.argv[2])], sys.argv[1] == "--status-preview")
+            return 0
         entries = worktrees()
         selection = choose(entries)
         if selection is None:
@@ -75,6 +138,9 @@ def main():
             return remove_worktree(path)
         print(path)
         return 0
+    except (IndexError, ValueError):
+        print("git wt: worktree selection is no longer available", file=sys.stderr)
+        return 1
     except (OSError, subprocess.CalledProcessError) as error:
         print(f"git wt: {error}", file=sys.stderr)
         return 1
