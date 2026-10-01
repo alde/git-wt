@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""Select a Git worktree to enter or remove."""
+
+import os
+import subprocess
+import sys
+
+
+def worktrees():
+    result = subprocess.run(
+        ["git", "worktree", "list", "--porcelain", "-z"],
+        stdout=subprocess.PIPE,
+        check=True,
+    )
+    entries = []
+    for field in result.stdout.split(b"\0"):
+        if field.startswith(b"worktree "):
+            entries.append({"path": os.fsdecode(field[len(b"worktree "):]), "branch": ""})
+        elif field.startswith(b"branch "):
+            entries[-1]["branch"] = os.fsdecode(field[len(b"branch "):]).removeprefix("refs/heads/")
+        elif field == b"detached":
+            entries[-1]["branch"] = "detached"
+    return entries
+
+
+def choose(entries):
+    rows = []
+    for index, entry in enumerate(entries):
+        path = entry["path"].replace("\n", "\\n").replace("\t", "\\t")
+        branch = entry["branch"].replace("\n", "\\n").replace("\t", "\\t")
+        rows.append(f"{index}\t{path}\t{branch}".encode())
+    result = subprocess.run(
+        ["fzf", "--read0", "--print0", "--no-multi", "--expect=x",
+         "--delimiter=\t", "--with-nth=2..",
+         "--header=Enter: cd  |  x: remove worktree"],
+        input=b"\0".join(rows) + b"\0",
+        stdout=subprocess.PIPE,
+    )
+    if result.returncode:
+        return None
+    key, row = result.stdout.split(b"\0")[:2]
+    return key, entries[int(row.split(b"\t", 1)[0])]
+
+
+def confirm_removal(path):
+    with open("/dev/tty", "r+", encoding="utf-8") as terminal:
+        terminal.write(f"Remove worktree {path}? [y/N] ")
+        terminal.flush()
+        return terminal.readline().strip().lower() in ("y", "yes")
+
+
+def remove_worktree(path):
+    if os.path.commonpath((os.getcwd(), path)) == path:
+        print("Cannot remove the current worktree; switch away first.", file=sys.stderr)
+        return 1
+    if not confirm_removal(path):
+        return 0
+    return subprocess.run(
+        ["git", "worktree", "remove", path], stdout=sys.stderr
+    ).returncode
+
+
+def main():
+    if len(sys.argv) != 1:
+        print("usage: git wt", file=sys.stderr)
+        return 2
+    try:
+        entries = worktrees()
+        selection = choose(entries)
+        if selection is None:
+            return 0
+        key, entry = selection
+        path = entry["path"]
+        if key == b"x":
+            return remove_worktree(path)
+        print(path)
+        return 0
+    except (OSError, subprocess.CalledProcessError) as error:
+        print(f"git wt: {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
