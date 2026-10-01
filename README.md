@@ -2,9 +2,12 @@
 
 An interactive `git worktree list` picker using `fzf`.
 
-- **Enter** changes the current shell directory to the selected worktree.
-- **x** asks for confirmation, then runs `git worktree remove` for the selected
-  worktree. Git refuses to remove a dirty worktree. The branch is retained.
+- **Tab** marks or unmarks worktrees for removal.
+- **Enter** changes the current shell directory to a single selected worktree.
+- **x** asks for one confirmation, then runs `git worktree remove` for each
+  marked worktree (or the focused worktree if none are marked). Git refuses to
+  remove a dirty worktree; removal continues for the others. The current
+  worktree is skipped. Branches are retained.
 - **Ctrl-S** checks whether the focused worktree has local changes.
 - **Esc** leaves the directory and worktrees alone.
 

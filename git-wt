@@ -39,18 +39,18 @@ def choose(entries):
         branch = entry["branch"].replace("\n", "\\n").replace("\t", "\\t")
         rows.append(f"{index}\t{path}\t{branch}".encode())
     result = subprocess.run(
-        ["fzf", "--read0", "--print0", "--no-multi", "--expect=x",
+        ["fzf", "--read0", "--print0", "--multi", "--expect=x",
          "--delimiter=\t", "--with-nth=2..",
          "--preview=" + preview_command("--preview"),
          "--bind=ctrl-s:preview(" + preview_command("--status-preview") + ")",
-         "--header=Enter: cd  |  x: remove  |  Ctrl-S: check changes"],
+         "--header=Tab: mark  |  Enter: cd  |  x: remove marked  |  Ctrl-S: check changes"],
         input=b"\0".join(rows) + b"\0",
         stdout=subprocess.PIPE,
     )
     if result.returncode:
         return None
-    key, row = result.stdout.split(b"\0")[:2]
-    return key, entries[int(row.split(b"\t", 1)[0])]
+    key, *rows = result.stdout.rstrip(b"\0").split(b"\0")
+    return key, [entries[int(row.split(b"\t", 1)[0])] for row in rows]
 
 
 def base_branch(path):
@@ -100,23 +100,35 @@ def preview(entry, check_changes=False):
         print("Changes: press Ctrl-S to check")
 
 
-def confirm_removal(path):
+def confirm_removal(paths):
     with open("/dev/tty", "w", encoding="utf-8") as prompt:
         with open("/dev/tty", "r", encoding="utf-8") as response:
-            prompt.write(f"Remove worktree {path}? [y/N] ")
+            if len(paths) == 1:
+                prompt.write(f"Remove worktree {paths[0]}? [y/N] ")
+            else:
+                prompt.write(f"Remove {len(paths)} worktrees?\n")
+                for path in paths:
+                    prompt.write(f"  {path}\n")
+                prompt.write("[y/N] ")
             prompt.flush()
             return response.readline().strip().lower() in ("y", "yes")
 
 
-def remove_worktree(path):
-    if os.path.commonpath((os.getcwd(), path)) == path:
+def remove_worktrees(entries):
+    paths = [entry["path"] for entry in entries]
+    current = os.getcwd()
+    removable = [path for path in paths if os.path.commonpath((current, path)) != path]
+    if len(removable) != len(paths):
         print("Cannot remove the current worktree; switch away first.", file=sys.stderr)
+    if not removable:
         return 1
-    if not confirm_removal(path):
+    if not confirm_removal(removable):
         return 0
-    return subprocess.run(
-        ["git", "worktree", "remove", path], stdout=sys.stderr
-    ).returncode
+    failed = len(removable) != len(paths)
+    for path in removable:
+        if subprocess.run(["git", "worktree", "remove", path], stdout=sys.stderr).returncode:
+            failed = True
+    return int(failed)
 
 
 def main():
@@ -132,11 +144,13 @@ def main():
         selection = choose(entries)
         if selection is None:
             return 0
-        key, entry = selection
-        path = entry["path"]
+        key, selected = selection
         if key == b"x":
-            return remove_worktree(path)
-        print(path)
+            return remove_worktrees(selected)
+        if len(selected) != 1:
+            print("Select one worktree to enter, or press x to remove the marked worktrees.", file=sys.stderr)
+            return 1
+        print(selected[0]["path"])
         return 0
     except (IndexError, ValueError):
         print("git wt: worktree selection is no longer available", file=sys.stderr)
