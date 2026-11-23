@@ -25,7 +25,8 @@ executable under `~/.local/bin` and enables the function for that shell only.
 For zsh or bash it adds a source line to the shell's rc file; for fish it links
 a file into `~/.config/fish/conf.d`. To select a shell explicitly, run
 `./setup.sh --shell fish` (or `zsh` or `bash`). Rerun setup after moving the
-repository. Open a new shell, then run `git wt` inside a Git worktree.
+repository. Setup installs from whichever checkout runs it, so running it in a
+worktree lets you try a branch; rerun it from the main checkout to go back. Open a new shell, then run `git wt` inside a Git worktree.
 
 ## Rex
 
@@ -40,7 +41,8 @@ checkouts are called `tool`. To bind a key, add a line such as
 
 Setup links `rex/git-wt.lua` into the Rex configuration directory and adds
 `require("git-wt")` to `init.lua`. Without `--rex`, nothing touches Rex, and
-`git wt` works the same either way.
+`git wt` works the same either way. `./setup.sh --remove-rex` undoes both and
+leaves the rest of git-wt installed.
 
 Repositories are found by scanning up to four levels below each root, without
 descending into checkouts. Set `GIT_WT_ROOTS` to a colon-separated list of
