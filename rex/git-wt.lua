@@ -1,6 +1,7 @@
 -- Rex integration for git-wt: pick a worktree from any repository under
--- GIT_WT_ROOTS and switch to its session, creating one with a shell in the
--- worktree when none exists. Installed by `./setup.sh --rex`.
+-- GIT_WT_ROOTS and switch to its tab in the repository's session, creating
+-- the session or the tab, with a shell in the worktree, when missing.
+-- Installed by `./setup.sh --rex`.
 
 local GIT_WT = os.getenv("HOME") .. "/.local/bin/git-wt"
 -- Listing ~100 repositories takes well under a second; the margin covers a
@@ -20,7 +21,7 @@ local function list_worktrees()
   return assert(rex.json.decode(result.stdout))
 end
 
-local function session_label(worktree)
+local function picker_title(worktree)
   return worktree.repo .. ":" .. worktree.branch
 end
 
@@ -37,7 +38,7 @@ local function pick_worktree(worktrees)
     by_path[worktree.path] = worktree
     table.insert(items, {
       id = worktree.path,
-      title = session_label(worktree),
+      title = picker_title(worktree),
       subtitle = shorten_home(worktree.path),
       icon = "branch",
     })
@@ -50,37 +51,60 @@ local function pick_worktree(worktrees)
   return path and by_path[path]
 end
 
-local function find_session(label)
-  local listed = assert(rex.call("session.list"))
-  for _, session in ipairs(listed.sessions or {}) do
-    if session.label == label then
-      return session.session_id
+-- Detached worktrees would all share one tab label, so name those by directory.
+local function tab_label(worktree)
+  if worktree.branch == "detached" then
+    return worktree.path:match("([^/]+)$")
+  end
+  return worktree.branch
+end
+
+local function find_by_label(items, label)
+  for _, item in ipairs(items or {}) do
+    if item.label == label then
+      return item
     end
   end
 end
 
-local function create_session(label, path)
-  local created = assert(rex.call("session.create", {
-    label = label,
-    initial_windows = {
-      { layout = rex.layout.block{ flavor = SHELL, options = { cwd = path } } },
-    },
+local function shell_in(path)
+  return rex.layout.block{ flavor = SHELL, options = { cwd = path } }
+end
+
+-- One session per repository, one tab per worktree. Returns the session and
+-- window to show, creating whichever does not exist yet.
+local function open_tab(worktree)
+  local label = tab_label(worktree)
+  local session = find_by_label(assert(rex.call("session.list")).sessions, worktree.repo)
+  if session == nil then
+    local created = assert(rex.call("session.create", {
+      label = worktree.repo,
+      initial_windows = { { window_label = label, layout = shell_in(worktree.path) } },
+    }))
+    return created.session_id, created.initial_windows[1].window_id
+  end
+  -- Methods on another session need this connection attached to it first;
+  -- attaching again is harmless and returns the session's current view.
+  local view = assert(rex.call("session.attach", { session_id = session.session_id })).view
+  local window = find_by_label(view.windows, label) or assert(rex.call("session.new_window", {
+    session_id = session.session_id,
+    window_label = label,
+    layout = shell_in(worktree.path),
   }))
-  return created.session_id
+  return session.session_id, window.window_id
 end
 
 rex.action{
   name = "git_wt_open",
   title = "Git: Open Worktree…",
-  description = "Switch to a worktree's session, creating it with a shell there if needed.",
+  description = "Switch to a worktree's tab in its repository's session, creating either if needed.",
   keywords = "git worktree branch repo session switch",
   run = function(ctx, args)
     local worktree = pick_worktree(list_worktrees())
     if worktree == nil then
       return
     end
-    local label = session_label(worktree)
-    local session_id = find_session(label) or create_session(label, worktree.path)
-    rex.client.queue("session.select", { session_id = session_id })
+    local session_id, window_id = open_tab(worktree)
+    rex.client.queue("session.select", { session_id = session_id, window_id = window_id })
   end,
 }
