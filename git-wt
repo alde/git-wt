@@ -7,9 +7,9 @@ import subprocess
 import sys
 
 
-def worktrees():
+def worktrees(repo="."):
     result = subprocess.run(
-        ["git", "worktree", "list", "--porcelain", "-z"],
+        ["git", "-C", repo, "worktree", "list", "--porcelain", "-z"],
         stdout=subprocess.PIPE,
         check=True,
     )
