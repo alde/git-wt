@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Select a Git worktree to enter or remove."""
 
+import base64
 import concurrent.futures
 import json
 import os
@@ -13,6 +14,7 @@ DEFAULT_ROOTS = "~/src"
 # ~/src/<host>/<org>/<repo> sits three levels down; one more allows for
 # slightly deeper layouts without walking into large source trees.
 MAX_SCAN_DEPTH = 4
+STATUS_APP = "git-wt"
 
 
 def worktrees(repo="."):
@@ -68,12 +70,14 @@ def repository_names(repositories):
     return names
 
 
-def repository_worktrees(repo, name):
+def repository_worktrees(repo, name=None):
+    """List a repository's worktrees, named after the main checkout unless name is given."""
     try:
         entries = worktrees(repo)
     except subprocess.CalledProcessError as error:
         print(f"git wt: skipping {repo}: {error}", file=sys.stderr)
         return []
+    name = name or os.path.basename(entries[0]["path"])
     # Git lists the main checkout first; keep it there and order the rest by branch.
     main = [{**entry, "main": True} for entry in entries[:1]]
     linked = sorted(entries[1:], key=lambda entry: entry["branch"].casefold())
@@ -139,11 +143,46 @@ def stale_entry(entry):
         return None
 
 
-def stale_worktrees(roots):
-    """List linked worktrees whose work is merged into the base branch or whose upstream is gone."""
-    linked = [entry for entry in all_worktrees(roots) if not entry.get("main")]
+def stale_worktrees(entries):
+    """Pick the linked worktrees whose work is merged into the base branch or whose upstream is gone."""
+    linked = [entry for entry in entries if not entry.get("main")]
     with concurrent.futures.ThreadPoolExecutor() as pool:
         return [entry for entry in pool.map(stale_entry, linked) if entry]
+
+
+def report_status(state, message=None, **pairs):
+    """Tell a terminal that speaks OSC 7501 what git-wt is doing; others ignore it.
+
+    It goes to stderr because the shell function reads stdout as a directory.
+    """
+    if not sys.stderr.isatty():
+        return
+    fields = [f"state={state}", f"app={STATUS_APP}"]
+    fields += [f"{key}={value}" for key, value in pairs.items()]
+    if message:
+        fields.append("msg=" + base64.b64encode(message.encode()).decode())
+    sys.stderr.write("\033]7501;" + ":".join(fields) + "\033\\")
+    sys.stderr.flush()
+
+
+def run_fzf(columns, options):
+    """Show one row of columns per entry; return the rows fzf printed, or None if cancelled."""
+    rows = []
+    for index, fields in enumerate(columns):
+        escaped = (field.replace("\n", "\\n").replace("\t", "\\t") for field in fields)
+        rows.append("\t".join((str(index), *escaped)).encode())
+    result = subprocess.run(
+        ["fzf", "--read0", "--print0", "--multi", "--delimiter=\t", "--with-nth=2..", *options],
+        input=b"\0".join(rows) + b"\0",
+        stdout=subprocess.PIPE,
+    )
+    if result.returncode:
+        return None
+    return result.stdout.rstrip(b"\0").split(b"\0")
+
+
+def selected_entries(entries, rows):
+    return [entries[int(row.split(b"\t", 1)[0])] for row in rows if row]
 
 
 def preview_command(option):
@@ -155,24 +194,26 @@ def preview_command(option):
 
 
 def choose(entries):
-    rows = []
-    for index, entry in enumerate(entries):
-        path = entry["path"].replace("\n", "\\n").replace("\t", "\\t")
-        branch = entry["branch"].replace("\n", "\\n").replace("\t", "\\t")
-        rows.append(f"{index}\t{path}\t{branch}".encode())
-    result = subprocess.run(
-        ["fzf", "--read0", "--print0", "--multi", "--expect=x",
-         "--delimiter=\t", "--with-nth=2..",
+    output = run_fzf(
+        [(entry["path"], entry["branch"]) for entry in entries],
+        ["--expect=x",
          "--preview=" + preview_command("--preview"),
          "--bind=ctrl-s:preview(" + preview_command("--status-preview") + ")",
          "--header=Tab: mark  |  Enter: cd  |  x: remove marked  |  Ctrl-S: check changes"],
-        input=b"\0".join(rows) + b"\0",
-        stdout=subprocess.PIPE,
     )
-    if result.returncode:
+    if output is None:
         return None
-    key, *rows = result.stdout.rstrip(b"\0").split(b"\0")
-    return key, [entries[int(row.split(b"\t", 1)[0])] for row in rows]
+    key, *rows = output
+    return key, selected_entries(entries, rows)
+
+
+def choose_stale(entries):
+    output = run_fzf(
+        [(f"{entry['repo']}:{entry['branch']}", entry["reason"], entry["path"]) for entry in entries],
+        ["--bind=load:select-all",
+         "--header=All marked  |  Tab: unmark  |  Enter: remove marked  |  Esc: cancel"],
+    )
+    return selected_entries(entries, output) if output else []
 
 
 def base_branch(path):
@@ -244,42 +285,96 @@ def remove_worktrees(entries):
         print("Cannot remove the current worktree; switch away first.", file=sys.stderr)
     if not removable:
         return 1
+    report_status("blocked", f"Confirm removing {len(removable)} worktrees", kind="permission")
     if not confirm_removal(removable):
+        report_status("idle")
         return 0
-    failed = len(removable) != len(paths)
-    for path in removable:
-        if subprocess.run(["git", "worktree", "remove", path], stdout=sys.stderr).returncode:
-            failed = True
-    return int(failed)
+    failures = remove_each(removable) + len(paths) - len(removable)
+    return int(failures > 0)
 
 
-LISTINGS = {"--list-all": all_worktrees, "--list-stale": stale_worktrees}
+def remove_each(paths):
+    """Remove each worktree, reporting progress; return how many git refused."""
+    failures = 0
+    for done, path in enumerate(paths):
+        report_status("working", f"Removing {path}", progress=done * 100 // len(paths))
+        # -C lets this run from outside the repository, as the Rex panel does.
+        if subprocess.run(["git", "-C", path, "worktree", "remove", path],
+                          stdout=sys.stderr).returncode:
+            failures += 1
+        else:
+            print(f"Removed {path}", file=sys.stderr)
+    summary = f"Removed {len(paths) - failures} of {len(paths)} worktrees"
+    print(summary, file=sys.stderr)
+    report_status("error" if failures else "done", summary)
+    return failures
+
+
+def clean(list_worktrees):
+    """Offer the stale worktrees from list_worktrees() for removal, all marked."""
+    print("Finding stale worktrees…", file=sys.stderr)
+    report_status("working", "Finding stale worktrees")
+    stale = stale_worktrees(list_worktrees())
+    for entry in stale:
+        if entry["dirty"]:
+            print(f"Keeping {entry['path']}: it has uncommitted changes", file=sys.stderr)
+    removable = [entry for entry in stale if not entry["dirty"]]
+    if not removable:
+        print("No stale worktrees to remove.", file=sys.stderr)
+        report_status("done", "No stale worktrees to remove")
+        return 0
+    report_status("blocked", "Choose worktrees to remove", kind="question")
+    chosen = choose_stale(removable)
+    if not chosen:
+        report_status("idle")
+        return 0
+    return remove_worktrees(chosen)
+
+
+def pick():
+    entries = worktrees()
+    selection = choose(entries)
+    if selection is None:
+        return 0
+    key, selected = selection
+    if key == b"x":
+        return remove_worktrees(selected)
+    if len(selected) != 1:
+        print("Select one worktree to enter, or press x to remove the marked worktrees.", file=sys.stderr)
+        return 1
+    print(selected[0]["path"])
+    return 0
+
+
+USAGE = "usage: git wt [--clean | --clean-all | --list-all | --list-stale]"
+LISTINGS = {
+    "--list-all": all_worktrees,
+    "--list-stale": lambda roots: stale_worktrees(all_worktrees(roots)),
+}
+CLEANUPS = {
+    "--clean": lambda: repository_worktrees("."),
+    "--clean-all": lambda: all_worktrees(repository_roots()),
+}
+
+
+def run_command(args):
+    if len(args) == 1 and args[0] in LISTINGS:
+        json.dump(LISTINGS[args[0]](repository_roots()), sys.stdout)
+        return 0
+    if len(args) == 1 and args[0] in CLEANUPS:
+        return clean(CLEANUPS[args[0]])
+    if len(args) == 2 and args[0] in ("--preview", "--status-preview"):
+        preview(worktrees()[int(args[1])], args[0] == "--status-preview")
+        return 0
+    if args:
+        print(USAGE, file=sys.stderr)
+        return 2
+    return pick()
 
 
 def main():
-    if len(sys.argv) == 2 and sys.argv[1] in LISTINGS:
-        json.dump(LISTINGS[sys.argv[1]](repository_roots()), sys.stdout)
-        return 0
-    preview_mode = len(sys.argv) == 3 and sys.argv[1] in ("--preview", "--status-preview")
-    if len(sys.argv) != 1 and not preview_mode:
-        print("usage: git wt [--list-all | --list-stale]", file=sys.stderr)
-        return 2
     try:
-        if len(sys.argv) == 3:
-            preview(worktrees()[int(sys.argv[2])], sys.argv[1] == "--status-preview")
-            return 0
-        entries = worktrees()
-        selection = choose(entries)
-        if selection is None:
-            return 0
-        key, selected = selection
-        if key == b"x":
-            return remove_worktrees(selected)
-        if len(selected) != 1:
-            print("Select one worktree to enter, or press x to remove the marked worktrees.", file=sys.stderr)
-            return 1
-        print(selected[0]["path"])
-        return 0
+        return run_command(sys.argv[1:])
     except (IndexError, ValueError):
         print("git wt: worktree selection is no longer available", file=sys.stderr)
         return 1

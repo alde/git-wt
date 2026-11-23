@@ -44,14 +44,11 @@ part of its path that no other repository shares, such as `alde/tool` when two
 checkouts are called `tool`, so their sessions stay apart. To bind a key, add
 a line such as `rex.bind("shift+cmd+k", "git_wt_open")` to `init.lua`.
 
-**Git: Clean Up Stale Worktrees…** lists linked worktrees whose HEAD is already
-in the local base branch, or whose branch's upstream is gone, which is how a
-squash-merged branch usually looks after `git fetch --prune`. Nothing is
-fetched. Clean ones start ticked; dirty ones are shown but unticked, and git
-refuses to remove them anyway. Confirming runs `git worktree remove` for each
-and closes its Rex tab, and the repository's session when that was its last
-tab. Branches are kept. A new worktree with no commits yet also counts as
-merged, so untick any you are still using.
+**Git: Clean Up Stale Worktrees…** opens a pane below the focused one running
+`git wt --clean-all` (see [Cleaning up](#cleaning-up)). The pane stays open
+afterwards so you can read what was removed, and the command reports its
+progress to Rex over the program status protocol (OSC 7501), so the tab shows
+when it is waiting on you or done. Tabs for removed worktrees are left open.
 
 Setup links `rex/git-wt.lua` into the Rex configuration directory and adds
 `require("git-wt")` to `init.lua`. Without `--rex`, nothing touches Rex, and
@@ -63,6 +60,18 @@ descending into checkouts. Set `GIT_WT_ROOTS` to a colon-separated list of
 directories to scan elsewhere; for the Rex picker it must be set in the Rex
 server's environment. `git-wt --list-all` and `git-wt --list-stale` print
 the lists as JSON.
+
+## Cleaning up
+
+`git wt --clean` offers the stale worktrees of the current repository for
+removal; `git wt --clean-all` does the same for every repository under
+`GIT_WT_ROOTS`. A linked worktree is stale when its HEAD is already in the
+local base branch, or its branch's upstream is gone, which is how a
+squash-merged branch usually looks after `git fetch --prune`. Nothing is
+fetched. Worktrees with uncommitted changes are listed as kept and not offered.
+Every stale worktree starts marked: Tab unmarks, Enter removes the marked ones
+after one confirmation, and Esc cancels. Branches are kept. A new worktree with
+no commits yet also counts as merged, so unmark any you are still using.
 
 ## Notes
 

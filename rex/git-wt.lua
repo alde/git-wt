@@ -4,16 +4,15 @@
 -- GIT_WT_ROOTS and switches to its tab in the repository's session,
 -- creating the session or the tab, with a shell in the worktree, if missing.
 --
--- Git: Clean Up Stale Worktrees… offers the worktrees whose work is merged
--- or whose upstream branch is gone, removes the ones ticked, and closes
--- their tabs.
+-- Git: Clean Up Stale Worktrees… opens a pane running `git-wt --clean-all`,
+-- which offers the worktrees whose work is merged or whose upstream branch
+-- is gone and removes the ones left marked.
 
 local HOME = os.getenv("HOME")
 local GIT_WT = HOME .. "/.local/bin/git-wt"
--- Listing takes under a second and the stale check a few seconds on ~100
--- repositories; the margin covers a cold disk cache without leaving the
--- palette hanging indefinitely.
-local LIST_TIMEOUT_SECONDS = 30
+-- Listing ~100 repositories takes under a second; the margin covers a cold
+-- disk cache while staying inside an action's 30-second limit.
+local LIST_TIMEOUT_SECONDS = 20
 local SHELL = "com.superlogical.terminal.shell"
 
 local function git_wt(flag)
@@ -105,25 +104,6 @@ local function open_tab(worktree)
   return session.session_id, window.window_id
 end
 
--- Closes the worktree's tab, and the repository's session with it when that
--- was the last tab, since an empty session is of no use.
-local function close_tab(worktree)
-  local session = find_repo_session(worktree)
-  if session == nil then
-    return
-  end
-  local windows = session_view(session).windows or {}
-  local window = find_by_label(windows, tab_label(worktree))
-  if window == nil then
-    return
-  end
-  if #windows == 1 then
-    assert(rex.call("session.destroy", { session_id = session.session_id }))
-  else
-    assert(rex.call("session.close_window", { session_id = session.session_id, window_id = window.window_id }))
-  end
-end
-
 -- Teach zoxide about the visit so the picker ranks the repository higher next
 -- time. A shell that starts in a directory never tells zoxide on its own.
 -- Without zoxide, rex.exec returns nil and ranking stays alphabetical.
@@ -144,47 +124,22 @@ local function pick_worktree(worktrees)
   return path and index_by_path(worktrees)[path]
 end
 
--- Dirty worktrees are listed so nothing stale is hidden, but left unticked:
--- git refuses to remove them without --force, which this never passes.
-local function pick_stale(stale)
-  local items = {}
-  for _, worktree in ipairs(stale) do
-    local item = picker_item(worktree)
-    item.detail = worktree.dirty and (worktree.reason .. ", dirty") or worktree.reason
-    item.selected = not worktree.dirty
-    table.insert(items, item)
-  end
-  return rex.ui.pick{
-    title = "Remove stale worktrees",
-    placeholder = "Filter worktrees",
-    confirm = "Remove",
-    multiple = true,
-    items = items,
-  }
-end
-
-local function remove_worktree(worktree)
-  local result, err = rex.exec({ "git", "-C", worktree.path, "worktree", "remove", worktree.path })
-  if result == nil then
-    return err
-  end
-  if not result.ok then
-    return result.stderr
-  end
-  close_tab(worktree)
-end
-
--- Rex has no notification call, so failures are shown as a list to dismiss.
-local function show_failures(failures)
-  if #failures > 0 then
-    local title = #failures == 1 and "1 worktree was not removed"
-      or (#failures .. " worktrees were not removed")
-    rex.ui.pick{
-      title = title,
-      confirm = "Dismiss",
-      items = failures,
-    }
-  end
+-- The cleanup runs in a pane rather than in the action: it needs the person
+-- to choose, can take longer than an action is allowed, and shows its
+-- progress there, reporting status over OSC 7501. The pane stays open after
+-- it finishes so the result can be read.
+local function open_cleanup_panel(ctx)
+  assert(rex.session.new_split{
+    anchor_id = ctx.block_id,
+    direction = "vertical",
+    side = "after",
+    focus = true,
+    layout = rex.layout.block{
+      flavor = SHELL,
+      label = "git-wt clean",
+      options = { command = { GIT_WT, "--clean-all" }, cwd = HOME, exit = { on_completion = false } },
+    },
+  })
 end
 
 rex.action{
@@ -206,25 +161,9 @@ rex.action{
 rex.action{
   name = "git_wt_clean",
   title = "Git: Clean Up Stale Worktrees…",
-  description = "Remove worktrees whose work is merged or whose upstream is gone, and close their tabs.",
+  description = "Open a pane to remove worktrees whose work is merged or whose upstream is gone.",
   keywords = "git worktree remove prune stale merged clean",
   run = function(ctx, args)
-    local stale = git_wt("--list-stale")
-    if #stale == 0 then
-      rex.ui.pick{ title = "No stale worktrees", confirm = "Dismiss", items = {} }
-      return
-    end
-    local chosen = pick_stale(stale)
-    if chosen == nil then
-      return
-    end
-    local by_path, failures = index_by_path(stale), {}
-    for _, path in ipairs(chosen) do
-      local problem = remove_worktree(by_path[path])
-      if problem then
-        table.insert(failures, { id = path, title = picker_title(by_path[path]), subtitle = problem })
-      end
-    end
-    show_failures(failures)
+    open_cleanup_panel(ctx)
   end,
 }

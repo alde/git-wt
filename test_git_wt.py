@@ -157,10 +157,24 @@ class StaleWorktreeTests(unittest.TestCase):
         (dirty / "notes.txt").write_text("unsaved\n")
         self.add_worktree("active", commit=True)
 
-        stale = git_wt.stale_worktrees([self.tmp.name])
+        stale = git_wt.stale_worktrees(git_wt.all_worktrees([self.tmp.name]))
 
         self.assertEqual([(entry["branch"], entry["reason"], entry["dirty"]) for entry in stale],
                          [("dirty", "merged into main", True), ("merged", "merged into main", False)])
+
+    def test_clean_removes_chosen_merged_worktrees_and_keeps_dirty_ones(self):
+        merged = self.add_worktree("merged")
+        dirty = self.add_worktree("dirty")
+        (dirty / "notes.txt").write_text("unsaved\n")
+
+        with mock.patch.object(git_wt, "choose_stale", side_effect=lambda entries: entries) as choose, \
+             mock.patch.object(git_wt, "confirm_removal", return_value=True), \
+             mock.patch.object(git_wt.os, "getcwd", return_value=self.tmp.name):
+            self.assertEqual(git_wt.clean(lambda: git_wt.repository_worktrees(str(self.repo))), 0)
+
+        self.assertEqual([entry["branch"] for entry in choose.call_args.args[0]], ["merged"])
+        self.assertFalse(merged.exists())
+        self.assertTrue(dirty.exists())
 
 
 if __name__ == "__main__":
