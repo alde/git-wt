@@ -114,6 +114,54 @@ class RepositoryDiscoveryTests(unittest.TestCase):
         self.assertEqual([(entry["repo"], entry["branch"]) for entry in listed],
                          [("Alpha", "trunk"), ("Alpha", "able"), ("Alpha", "zed"), ("zeta", "main")])
 
+    def list_ranked(self, scores_output):
+        repos = ["/src/zeta", "/src/Alpha"]
+        listings = {repo: [{"path": repo, "branch": "main"}] for repo in repos}
+        with mock.patch.object(git_wt, "find_repositories", return_value=repos), \
+             mock.patch.object(git_wt, "worktrees", side_effect=listings.get), \
+             mock.patch.object(git_wt.os.path, "isdir", return_value=True), \
+             mock.patch.object(git_wt.subprocess, "run", side_effect=scores_output):
+            return [entry["repo"] for entry in git_wt.all_worktrees(["/src"])]
+
+    def test_ranks_repositories_by_zoxide_usage(self):
+        scores = subprocess.CompletedProcess([], 0, "  9.0 /src/zeta/sub\n  2.0 /src/Alpha\n", "")
+
+        self.assertEqual(self.list_ranked([scores]), ["zeta", "Alpha"])
+
+    def test_without_zoxide_repositories_are_alphabetical(self):
+        self.assertEqual(self.list_ranked(FileNotFoundError("zoxide")), ["Alpha", "zeta"])
+
+
+class StaleWorktreeTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.repo = pathlib.Path(self.tmp.name) / "repo"
+        self.git("init", "-q", "-b", "main", str(self.repo), cwd=self.tmp.name)
+        self.git("commit", "-q", "--allow-empty", "-m", "initial")
+
+    def git(self, *args, cwd=None):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                       cwd=cwd or self.repo, check=True, capture_output=True)
+
+    def add_worktree(self, branch, commit=False):
+        path = self.repo / ".worktrees" / branch
+        self.git("worktree", "add", "-q", "-b", branch, str(path))
+        if commit:
+            self.git("commit", "-q", "--allow-empty", "-m", branch, cwd=path)
+        return path
+
+    def test_lists_merged_worktrees_and_flags_dirty_ones(self):
+        self.add_worktree("merged")
+        dirty = self.add_worktree("dirty")
+        (dirty / "notes.txt").write_text("unsaved\n")
+        self.add_worktree("active", commit=True)
+
+        stale = git_wt.stale_worktrees([self.tmp.name])
+
+        self.assertEqual([(entry["branch"], entry["reason"], entry["dirty"]) for entry in stale],
+                         [("dirty", "merged into main", True), ("merged", "merged into main", False)])
+
 
 if __name__ == "__main__":
     unittest.main()

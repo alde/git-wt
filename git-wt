@@ -75,17 +75,75 @@ def repository_worktrees(repo, name):
         print(f"git wt: skipping {repo}: {error}", file=sys.stderr)
         return []
     # Git lists the main checkout first; keep it there and order the rest by branch.
-    main, linked = entries[:1], sorted(entries[1:], key=lambda entry: entry["branch"].casefold())
+    main = [{**entry, "main": True} for entry in entries[:1]]
+    linked = sorted(entries[1:], key=lambda entry: entry["branch"].casefold())
     return [{**entry, "repo": name} for entry in main + linked if os.path.isdir(entry["path"])]
 
 
+def usage_scores():
+    """Map each directory zoxide knows to its frecency score; empty without zoxide."""
+    try:
+        listed = subprocess.run(["zoxide", "query", "--list", "--score"],
+                                capture_output=True, text=True)
+    except FileNotFoundError:
+        return {}
+    scores = {}
+    for line in listed.stdout.splitlines():
+        score, _, path = line.strip().partition(" ")
+        scores[path] = float(score)
+    return scores
+
+
+def repository_usage(repo, scores):
+    inside = repo + os.sep
+    return sum(score for path, score in scores.items() if path == repo or path.startswith(inside))
+
+
 def all_worktrees(roots):
+    """List worktrees of every repository, most used repositories first, then by name."""
     repositories = [repo for root in roots for repo in find_repositories(root)]
     names = repository_names(repositories)
-    repositories.sort(key=lambda repo: names[repo].casefold())
+    scores = usage_scores()
+    repositories.sort(key=lambda repo: (-repository_usage(repo, scores), names[repo].casefold()))
     with concurrent.futures.ThreadPoolExecutor() as pool:
         listings = pool.map(repository_worktrees, repositories, map(names.get, repositories))
     return [entry for listing in listings for entry in listing]
+
+
+def upstream_gone(path, branch):
+    track = subprocess.run(
+        ["git", "-C", path, "for-each-ref", "--format=%(upstream:track)",
+         f"refs/heads/{branch}"],
+        capture_output=True, check=True, text=True,
+    ).stdout.strip()
+    return track == "[gone]"
+
+
+def stale_reason(entry):
+    path = entry["path"]
+    base = base_branch(path)
+    if base and ahead_behind(path, base)[0] == 0:
+        return f"merged into {base}"
+    if entry["branch"] != "detached" and upstream_gone(path, entry["branch"]):
+        return "upstream gone"
+    return None
+
+
+def stale_entry(entry):
+    """Return entry with why it is stale and whether it is dirty, or None if it is in use."""
+    try:
+        reason = stale_reason(entry)
+        return reason and {**entry, "reason": reason, "dirty": has_changes(entry["path"])}
+    except subprocess.CalledProcessError as error:
+        print(f"git wt: skipping {entry['path']}: {error}", file=sys.stderr)
+        return None
+
+
+def stale_worktrees(roots):
+    """List linked worktrees whose work is merged into the base branch or whose upstream is gone."""
+    linked = [entry for entry in all_worktrees(roots) if not entry.get("main")]
+    with concurrent.futures.ThreadPoolExecutor() as pool:
+        return [entry for entry in pool.map(stale_entry, linked) if entry]
 
 
 def preview_command(option):
@@ -195,13 +253,16 @@ def remove_worktrees(entries):
     return int(failed)
 
 
+LISTINGS = {"--list-all": all_worktrees, "--list-stale": stale_worktrees}
+
+
 def main():
-    if sys.argv[1:] == ["--list-all"]:
-        json.dump(all_worktrees(repository_roots()), sys.stdout)
+    if len(sys.argv) == 2 and sys.argv[1] in LISTINGS:
+        json.dump(LISTINGS[sys.argv[1]](repository_roots()), sys.stdout)
         return 0
     preview_mode = len(sys.argv) == 3 and sys.argv[1] in ("--preview", "--status-preview")
     if len(sys.argv) != 1 and not preview_mode:
-        print("usage: git wt [--list-all]", file=sys.stderr)
+        print("usage: git wt [--list-all | --list-stale]", file=sys.stderr)
         return 2
     try:
         if len(sys.argv) == 3:
