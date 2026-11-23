@@ -1,9 +1,10 @@
-"""Behaviour checks for multi-selection and worktree removal."""
+"""Behaviour checks for selection, removal and repository discovery."""
 
 import importlib.machinery
 import importlib.util
 import pathlib
 import subprocess
+import tempfile
 import unittest
 from unittest import mock
 
@@ -53,6 +54,47 @@ class WorktreeSelectionTests(unittest.TestCase):
 
         confirm.assert_called_once_with(["/trees/other"])
         run.assert_called_once()
+
+
+class RepositoryDiscoveryTests(unittest.TestCase):
+    def make_tree(self, root, directories, files=()):
+        for directory in directories:
+            (root / directory).mkdir(parents=True)
+        for file in files:
+            (root / file).write_text("gitdir: elsewhere\n")
+
+    def test_finds_main_checkouts_without_entering_them(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            self.make_tree(root, [
+                "shallow/.git",
+                "github.com/org/deep/.git",
+                "github.com/org/deep/vendor/nested/.git",
+                "github.com/org/.hidden/repo/.git",
+                "linked",
+            ], files=["linked/.git"])
+
+            found = sorted(git_wt.find_repositories(str(root)))
+
+        self.assertEqual(found, [str(root / "github.com/org/deep"), str(root / "shallow")])
+
+    def test_stops_at_scan_depth(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            self.make_tree(root, ["a/b/.git", "a/b2/c/.git"])
+
+            found = list(git_wt.find_repositories(str(root), depth=2))
+
+        self.assertEqual(found, [str(root / "a/b")])
+
+    def test_names_use_shortest_unique_trailing_path(self):
+        repos = ["/src/github.com/alde/tool", "/src/ghe/team/tool", "/src/github.com/alde/solo"]
+
+        self.assertEqual(git_wt.repository_names(repos), {
+            "/src/github.com/alde/tool": "alde/tool",
+            "/src/ghe/team/tool": "team/tool",
+            "/src/github.com/alde/solo": "solo",
+        })
 
 
 if __name__ == "__main__":

@@ -27,6 +27,28 @@ a file into `~/.config/fish/conf.d`. To select a shell explicitly, run
 `./setup.sh --shell fish` (or `zsh` or `bash`). Rerun setup after moving the
 repository. Open a new shell, then run `git wt` inside a Git worktree.
 
+## Rex
+
+If you use [Rex](https://www.superlogical.com/rex/), run `./setup.sh --rex`
+as well. It adds **Git: Open Worktree…** to the Rex command palette, which
+lists the worktrees of every repository under `~/src`. Picking one switches to
+a Rex session named `repo:branch`, creating it with a shell in the worktree if
+it does not exist yet. A repository is named by the shortest trailing part of
+its path that no other repository shares, such as `alde/tool` when two
+checkouts are called `tool`. To bind a key, add a line such as
+`rex.bind("shift+cmd+k", "git_wt_open")` to `init.lua`.
+
+Setup links `rex/git-wt.lua` into the Rex configuration directory and adds
+`require("git-wt")` to `init.lua`. Without `--rex`, nothing touches Rex, and
+`git wt` works the same either way.
+
+Repositories are found by scanning up to four levels below each root, without
+descending into checkouts. Set `GIT_WT_ROOTS` to a colon-separated list of
+directories to scan elsewhere; for the Rex picker it must be set in the Rex
+server's environment. `git-wt --list-all` prints the same list as JSON.
+
+## Notes
+
 The shell function handles `git wt` and passes other `git` commands through.
 The standalone `git-wt` executable prints a selected path; it cannot change
 its parent shell's directory on its own.

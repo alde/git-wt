@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
 """Select a Git worktree to enter or remove."""
 
+import concurrent.futures
+import json
 import os
+import pathlib
 import shlex
 import subprocess
 import sys
+
+DEFAULT_ROOTS = "~/src"
+# ~/src/<host>/<org>/<repo> sits three levels down; one more allows for
+# slightly deeper layouts without walking into large source trees.
+MAX_SCAN_DEPTH = 4
 
 
 def worktrees(repo="."):
@@ -22,6 +30,59 @@ def worktrees(repo="."):
         elif field == b"detached":
             entries[-1]["branch"] = "detached"
     return entries
+
+
+def repository_roots():
+    configured = os.environ.get("GIT_WT_ROOTS", DEFAULT_ROOTS)
+    return [os.path.expanduser(root) for root in configured.split(os.pathsep) if root]
+
+
+def find_repositories(directory, depth=MAX_SCAN_DEPTH):
+    """Yield main checkouts under directory without descending into any checkout."""
+    try:
+        children = list(os.scandir(directory))
+    except OSError:
+        return
+    git = next((child for child in children if child.name == ".git"), None)
+    if git is not None:
+        if git.is_dir(follow_symlinks=False):
+            yield directory
+        return
+    if depth == 0:
+        return
+    for child in children:
+        if child.is_dir(follow_symlinks=False) and not child.name.startswith("."):
+            yield from find_repositories(child.path, depth - 1)
+
+
+def repository_names(repositories):
+    """Name each repository by the shortest trailing path no other shares."""
+    parts = {repo: pathlib.PurePath(repo).parts for repo in repositories}
+    names = {}
+    for repo, own in parts.items():
+        others = [other for other_repo, other in parts.items() if other_repo != repo]
+        length = 1
+        while length < len(own) and any(other[-length:] == own[-length:] for other in others):
+            length += 1
+        names[repo] = "/".join(own[-length:])
+    return names
+
+
+def repository_worktrees(repo, name):
+    try:
+        entries = worktrees(repo)
+    except subprocess.CalledProcessError as error:
+        print(f"git wt: skipping {repo}: {error}", file=sys.stderr)
+        return []
+    return [{**entry, "repo": name} for entry in entries if os.path.isdir(entry["path"])]
+
+
+def all_worktrees(roots):
+    repositories = [repo for root in roots for repo in find_repositories(root)]
+    names = repository_names(repositories)
+    with concurrent.futures.ThreadPoolExecutor() as pool:
+        listings = pool.map(repository_worktrees, repositories, map(names.get, repositories))
+    return [entry for listing in listings for entry in listing]
 
 
 def preview_command(option):
@@ -132,9 +193,12 @@ def remove_worktrees(entries):
 
 
 def main():
+    if sys.argv[1:] == ["--list-all"]:
+        json.dump(all_worktrees(repository_roots()), sys.stdout)
+        return 0
     preview_mode = len(sys.argv) == 3 and sys.argv[1] in ("--preview", "--status-preview")
     if len(sys.argv) != 1 and not preview_mode:
-        print("usage: git wt", file=sys.stderr)
+        print("usage: git wt [--list-all]", file=sys.stderr)
         return 2
     try:
         if len(sys.argv) == 3:
