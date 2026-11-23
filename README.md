@@ -45,10 +45,12 @@ checkouts are called `tool`, so their sessions stay apart. To bind a key, add
 a line such as `rex.bind("shift+cmd+k", "git_wt_open")` to `init.lua`.
 
 **Git: Clean Up Stale Worktrees…** opens a pane below the focused one running
-`git wt --clean-all` (see [Cleaning up](#cleaning-up)). The pane stays open
-afterwards so you can read what was removed, and the command reports its
-progress to Rex over the program status protocol (OSC 7501), so the tab shows
-when it is waiting on you or done. Tabs for removed worktrees are left open.
+`git wt --clean-all` (see [Cleaning up](#cleaning-up)). While it runs it
+reports its progress to Rex over the program status protocol (OSC 7501), so the
+tab shows when it is waiting on you. The pane closes when it finishes, and the
+result arrives as a desktop notification, which Rex shows if notifications are
+enabled in its settings. Tabs for removed worktrees are left open. Setting
+`GIT_WT_NOTIFY=1` gives the same notification outside Rex.
 
 Setup links `rex/git-wt.lua` into the Rex configuration directory and adds
 `require("git-wt")` to `init.lua`. Without `--rex`, nothing touches Rex, and

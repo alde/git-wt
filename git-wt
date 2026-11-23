@@ -15,6 +15,9 @@ DEFAULT_ROOTS = "~/src"
 # slightly deeper layouts without walking into large source trees.
 MAX_SCAN_DEPTH = 4
 STATUS_APP = "git-wt"
+FINAL_STATES = ("done", "error")
+# Set by the Rex cleanup pane, which closes on success and so loses its status record.
+NOTIFY_ENV = "GIT_WT_NOTIFY"
 # fzf marks multi-selected rows with a red bar by default; a check reads as "will act on this".
 MARKER_OPTIONS = ("--marker=✓", "--color=marker:green")
 
@@ -164,7 +167,15 @@ def report_status(state, message=None, **pairs):
     if message:
         fields.append("msg=" + base64.b64encode(message.encode()).decode())
     sys.stderr.write("\033]7501;" + ":".join(fields) + "\033\\")
+    if state in FINAL_STATES and message and os.environ.get(NOTIFY_ENV):
+        notify(message)
     sys.stderr.flush()
+
+
+def notify(message):
+    """Ask the terminal for a desktop notification (OSC 777), for callers whose pane closes."""
+    text = message.replace(";", ",")  # ';' separates the OSC 777 fields
+    sys.stderr.write(f"\033]777;notify;{STATUS_APP};{text}\033\\")
 
 
 def run_fzf(columns, options):

@@ -126,8 +126,11 @@ end
 
 -- The cleanup runs in a pane rather than in the action: it needs the person
 -- to choose, can take longer than an action is allowed, and shows its
--- progress there, reporting status over OSC 7501. The pane stays open after
--- it finishes so the result can be read.
+-- progress there, reporting status over OSC 7501.
+-- The pane closes when git-wt exits, taking its status record with it, so
+-- git-wt is asked to send the result as a desktop notification as well.
+local CLEANUP_COMMAND = { "env", "GIT_WT_NOTIFY=1", GIT_WT, "--clean-all" }
+
 local function open_cleanup_panel(ctx)
   assert(rex.session.new_split{
     anchor_id = ctx.block_id,
@@ -137,7 +140,7 @@ local function open_cleanup_panel(ctx)
     layout = rex.layout.block{
       flavor = SHELL,
       label = "git-wt clean",
-      options = { command = { GIT_WT, "--clean-all" }, cwd = HOME, exit = { on_completion = false } },
+      options = { command = CLEANUP_COMMAND, cwd = HOME },
     },
   })
 end
