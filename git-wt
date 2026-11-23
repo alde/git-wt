@@ -15,6 +15,8 @@ DEFAULT_ROOTS = "~/src"
 # slightly deeper layouts without walking into large source trees.
 MAX_SCAN_DEPTH = 4
 STATUS_APP = "git-wt"
+# fzf marks multi-selected rows with a red bar by default; a check reads as "will act on this".
+MARKER_OPTIONS = ("--marker=✓", "--color=marker:green")
 
 
 def worktrees(repo="."):
@@ -172,7 +174,8 @@ def run_fzf(columns, options):
         escaped = (field.replace("\n", "\\n").replace("\t", "\\t") for field in fields)
         rows.append("\t".join((str(index), *escaped)).encode())
     result = subprocess.run(
-        ["fzf", "--read0", "--print0", "--multi", "--delimiter=\t", "--with-nth=2..", *options],
+        ["fzf", "--read0", "--print0", "--multi", *MARKER_OPTIONS,
+         "--delimiter=\t", "--with-nth=2..", *options],
         input=b"\0".join(rows) + b"\0",
         stdout=subprocess.PIPE,
     )
