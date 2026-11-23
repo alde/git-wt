@@ -96,6 +96,24 @@ class RepositoryDiscoveryTests(unittest.TestCase):
             "/src/github.com/alde/solo": "solo",
         })
 
+    def test_lists_repositories_by_name_with_main_checkout_first(self):
+        listings = {
+            "/src/zeta": [{"path": "/src/zeta", "branch": "main"}],
+            "/src/Alpha": [
+                {"path": "/src/Alpha", "branch": "trunk"},
+                {"path": "/src/Alpha/.worktrees/z", "branch": "zed"},
+                {"path": "/src/Alpha/.worktrees/a", "branch": "able"},
+            ],
+        }
+
+        with mock.patch.object(git_wt, "find_repositories", return_value=["/src/zeta", "/src/Alpha"]), \
+             mock.patch.object(git_wt, "worktrees", side_effect=listings.get), \
+             mock.patch.object(git_wt.os.path, "isdir", return_value=True):
+            listed = git_wt.all_worktrees(["/src"])
+
+        self.assertEqual([(entry["repo"], entry["branch"]) for entry in listed],
+                         [("Alpha", "trunk"), ("Alpha", "able"), ("Alpha", "zed"), ("zeta", "main")])
+
 
 if __name__ == "__main__":
     unittest.main()

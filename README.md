@@ -32,12 +32,13 @@ worktree lets you try a branch; rerun it from the main checkout to go back. Open
 
 If you use [Rex](https://www.superlogical.com/rex/), run `./setup.sh --rex`
 as well. It adds **Git: Open Worktree…** to the Rex command palette, which
-lists the worktrees of every repository under `~/src`. Each repository gets
-one Rex session, named after it, with a tab per worktree named after the
-branch. Picking a worktree switches to its tab, creating the session or the tab
-with a shell in the worktree if needed. A repository is named by the shortest trailing part of
-its path that no other repository shares, such as `alde/tool` when two
-checkouts are called `tool`, so their sessions stay apart. To bind a key, add a line such as
+lists the worktrees of every repository under `~/src`, sorted by repository
+with the main checkout first. Each repository gets one Rex session, named after
+it, with a tab per worktree named after the branch. Picking a worktree switches
+to its tab, creating the session or the tab with a shell in the worktree if
+needed. A repository is named by the shortest trailing part of its path that no
+other repository shares, such as `alde/tool` when two checkouts are called
+`tool`, so their sessions stay apart. To bind a key, add a line such as
 `rex.bind("shift+cmd+k", "git_wt_open")` to `init.lua`.
 
 Setup links `rex/git-wt.lua` into the Rex configuration directory and adds

@@ -74,12 +74,15 @@ def repository_worktrees(repo, name):
     except subprocess.CalledProcessError as error:
         print(f"git wt: skipping {repo}: {error}", file=sys.stderr)
         return []
-    return [{**entry, "repo": name} for entry in entries if os.path.isdir(entry["path"])]
+    # Git lists the main checkout first; keep it there and order the rest by branch.
+    main, linked = entries[:1], sorted(entries[1:], key=lambda entry: entry["branch"].casefold())
+    return [{**entry, "repo": name} for entry in main + linked if os.path.isdir(entry["path"])]
 
 
 def all_worktrees(roots):
     repositories = [repo for root in roots for repo in find_repositories(root)]
     names = repository_names(repositories)
+    repositories.sort(key=lambda repo: names[repo].casefold())
     with concurrent.futures.ThreadPoolExecutor() as pool:
         listings = pool.map(repository_worktrees, repositories, map(names.get, repositories))
     return [entry for listing in listings for entry in listing]
